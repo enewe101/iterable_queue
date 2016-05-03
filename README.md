@@ -4,8 +4,9 @@ with the unnecessarily messy logic of managing pools of producers and
 consumers in multiprocessing python programs.
 
 ## Install ##
-```bash
-pip install iterable-queue`
+
+``` bash
+pip install iterable-queue
 ```
 
 ## Why? ##
@@ -44,12 +45,12 @@ small variation: when they are done putting work on the queue, they call
 `queue.close()`:
 
 ```python
-    producer_func(queue):
-		while some_condition:
-            ...
-            queue.put(some_work)
-            ...
-        queue.close()
+producer_func(queue):
+	while some_condition:
+		...
+		queue.put(some_work)
+		...
+	queue.close()
 ```
 
 But the beautiful part is with the consumers.
@@ -57,9 +58,11 @@ They use the queue somewhat differently than `multiprocessing.Queue`:
 consumers can treat the queue as an iterable, and iteration will 
 automatically stop when there is no work left:
 
-    consumer_func(queue):
-        for work in queue:
-            do_something_with(work)
+```python
+consumer_func(queue):
+	for work in queue:
+		do_something_with(work)
+```
 
 (But if you have the irrational desire, or unfortunate need, consumers can 
 also use the queue "manually" by calling `queue.get()`).
@@ -79,25 +82,28 @@ for the management of consumer iteration to work automatically.
 Let's setup a function that will be executed by *producers*, i.e. workers
 that put onto the queue
 
-    from random import random
-    from time import sleep
+```python
+from random import random
+from time import sleep
 
-    def producer_func(queue, producer_id):
-        for i in range(10):
-            sleep(random() / 100.0)
-            queue.put(producer_id)
-        queue.close()
+def producer_func(queue, producer_id):
+	for i in range(10):
+		sleep(random() / 100.0)
+		queue.put(producer_id)
+	queue.close()
+```
 
 Notice how the producer calls `queue.close()` when it's done putting
 stuff onto the queue; this is what allows termination to be transparent 
 from the perspective of the consumer (as we'll see in a moment).
 
 Now let's setup a consumer function:
-
-    def consumer_func(queue, consumer_id):
-        for item in queue:
-			sleep(random() / 100.0)
-            print 'consumer %d saw item %d' % (consumer_id, item)
+```python
+def consumer_func(queue, consumer_id):
+	for item in queue:
+		sleep(random() / 100.0)
+		print 'consumer %d saw item %d' % (consumer_id, item)
+```
 
 Notice again how the consumer treats the queue as an iterable --- there is 
 no need to worry about detecting a termination condition.
@@ -105,36 +111,42 @@ no need to worry about detecting a termination condition.
 Now, let's get some processes started.  First, we'll need an `IterableQueue`
 Instance:
 
-    from iterable_queue import `IterableQueue`
-    iq = `IterableQueue`
+```python
+from iterable_queue import `IterableQueue`
+iq = `IterableQueue`
+```
 
 And now, we just start an arbitrary number of producer and consumer 
 processes.  We give *producer endpoints* to the producers, which we get
 by calling `IterableQueue.get_producer()`, and we give *consumer endpoints*
 to consumers by calling `IterableQueue.get_consumer()`:
 
-    from multiprocessing import Process
+```pythong
+from multiprocessing import Process
 
-    # Start a bunch of producers:
-	for producer_id in range(17):
-		
-		# Give each producer a "producer-queue"
-        queue = iq.get_producer()
-        Process(target=producer_func, args=(queue, producer_id)).start()
+# Start a bunch of producers:
+for producer_id in range(17):
+	
+	# Give each producer a "producer-queue"
+	queue = iq.get_producer()
+	Process(target=producer_func, args=(queue, producer_id)).start()
 
-	# Start a bunch of consumers
-    for consumer_id in range(13):
+# Start a bunch of consumers
+for consumer_id in range(13):
 
-        # Give each consumer a "consumer-queue"
-        queue = iq.get_consumer()
-        Process(target=consumer_func, args=(queue, consumer_id)).start()
+	# Give each consumer a "consumer-queue"
+	queue = iq.get_consumer()
+	Process(target=consumer_func, args=(queue, consumer_id)).start()
+```
 
 Once we've finished making producer and consumer endpoints, we close
 the `IterableQueue`:  
 
+```python
 	# Once we've finished adding producers and consumers, we close the 
 	# queue.
 	iq.close()
+```
 
 This let's the `IterableQueue` know that no new producers
 will be coming onto the scene and adding more work.
