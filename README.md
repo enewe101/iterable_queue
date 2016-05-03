@@ -10,30 +10,32 @@ consumers in multiprocessing python programs.
 
 I don't know about you, but I'm sick of having to worry about managing the
 details of multiprocessing in python.  For example, suppose you have a 
-pool of *consumers* consuming tasks from a queue, which are being added
-by some pool of *producers*.  Of course, you want the consumers to keep 
+pool of *consumers* consuming tasks from a queue, which is being populated
+by a pool of *producers*.  Of course, you want the consumers to keep 
 pulling work from the queue as long as that queue isn't empty.
 
 The tricky part is, if the consumers are fast, they may continually drive
-the queue to empty even though the producers are still adding work.  So 
+the queue to empty even though the producers are still busy adding work.  So 
 in general, the producers also need to know if the consumers are all 
 done.  This means using some kind of signalling, either within the 
-queue itself or through some side channel.  Usually the producers need 
-to know how many consumers are there, and vice versa, or else some 
-centralized manager does.  And I'm just sick of that, I tell you.
+queue itself or through some side channel, and keeping track, somewhere,
+of how many producers are still working, and then notifying the consumers
+once all the producers are done.  This means that, right inside the
+producer and consumer code, you need to embed this signalling and tracking
+logic, and expose the state of the producers to the consumers, which 
+is complicated and just feels wrong.  And I'm just sick of it, I tell you.
 
-I shouldn't need to put that kind of synchronization logic inside the 
-actual code executed by the producers and consumers.  I say the *queue*
-should keep track of that stuff, so I can stick to writing the actual logic 
-of my program.
+Here's what I say: let the *queue* keep track of that stuff, so I can 
+stick to writing the just the logic of production and consumption for
+my producers and consumers.
 
 ## Meet IterableQueue ##
 
 IterableQueue is a directed queue, which means that it has 
-(arbitrarily many) producer endpoints and consumer endpoints.  The 
-IterableQueue knows how many producers and consumers are still open, and
-this eliminates annoying worker coordination logic in the producer-consumer 
-case.
+(arbitrarily many) *producer endpoints* and *consumer endpoints*.  The 
+IterableQueue knows how many producers and consumers are still at work, and
+this means it knows the difference between being temporarily empty, and
+when the work is really all done.
 
 Producers use the queue much like a `multiprocessing.Queue`, but with one
 small variation: when they are done putting work on the queue, they call
@@ -46,13 +48,17 @@ small variation: when they are done putting work on the queue, they call
             ...
         queue.close()
 
-Consumers use the queue somewhat differently than `multiprocessing.Queue`,
-and this is the beautiful part: consumers can treat the queue as an 
-iterable, and iteration will automatically stop when there is no work left:
+But the beautiful part is with the consumers.
+They use the queue somewhat differently than `multiprocessing.Queue`: 
+consumers can treat the queue as an iterable, and iteration will 
+automatically stop when there is no work left:
 
     consumer_func(queue):
         for work in queue:
             do_something_with(work)
+
+(But if you have the irrational desire, or unfortunate nee, consumers can 
+also use the queue "manually" by calling `queue.get()`).
 
 Because the IterableQueue knows how many producers and consumers are open,
 it knows when no more work will come through the queue, and so it can
