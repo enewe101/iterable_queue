@@ -43,8 +43,7 @@ consumers are still at work, and this lets it take care of the tracking
 and signalling necessary to tell the difference between being 
 temporarily empty, and being empty with no new work coming.  Because the
 `IterableQueue` knows when no new work is coming, it can be treated,
-on the consumer end, like an ordinary iterator, with iteration stopping
-when there's no more stuff coming on the queue.
+on the consumer end, stopping iteration naturally when all work is complete.
 
 Producers use the queue much like a `multiprocessing.Queue`, but with one
 small variation: when they are done putting work on the queue, they call
