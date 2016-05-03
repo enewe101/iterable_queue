@@ -57,7 +57,7 @@ automatically stop when there is no work left:
         for work in queue:
             do_something_with(work)
 
-(But if you have the irrational desire, or unfortunate nee, consumers can 
+(But if you have the irrational desire, or unfortunate need, consumers can 
 also use the queue "manually" by calling `queue.get()`).
 
 Because the IterableQueue knows how many producers and consumers are open,
@@ -66,7 +66,7 @@ stop iteration transparently.
 
 ## Use IterableQueue ##
 The IterableQueue is a directed queue, meaning that it has producer and 
-consumer endpoings.  Both wrap an underlying `multiprocessing.Queue`, and
+consumer endpoings.  Both wrap the same underlying `multiprocessing.Queue`, and
 expose *nearly* all of its methods.  An important exception is with the
 `put()` and `get()` methods: you can only `put()` onto producer endpoints, 
 and you can only `get()` from consumer endpoints.  This assumption is needed
@@ -96,12 +96,8 @@ Now let's setup a consumer function:
 			sleep(random() / 100.0)
             print 'consumer %d saw item %d' % (consumer_id, item)
 
-Notice how the consumer can treat the queue as an iterable.  This is 
-because the queue knows when all of it's producers have closed, at which
-point being empty means iteration should stop.  This means we don't need
-to coordinate using side channels like a pipe or send termination signals
-manually through the queue, and this means that the producers and consumers
-don't need to be aware of one another.
+Notice again how the consumer treats the queue as an iterable --- there is 
+no need to worry about detecting a termination condition.
 
 Now, let's get some processes started.  First, we'll need an IterableQueue
 Instance:
@@ -110,7 +106,7 @@ Instance:
     iq = IterableQueue
 
 And now, we just start an arbitrary number of producer and consumer 
-processes.  We give *producers endpoints* to the producers, which we get
+processes.  We give *producer endpoints* to the producers, which we get
 by calling `IterableQueue.get_producer()`, and we give *consumer endpoints*
 to consumers by calling `IterableQueue.get_consumer()`:
 
@@ -131,17 +127,18 @@ to consumers by calling `IterableQueue.get_consumer()`:
         Process(target=consumer_func, args=(queue, consumer_id)).start()
 
 Once we've finished making producer and consumer endpoints, we close
-the iterable queue.  This let's the IterableQueue know that no new producers
-will be coming onto the scene, so when the existing producers finish, 
-there won't be any new work coming onto the queue
+the iterable queue:  
 
 	# Once we've finished adding producers and consumers, we close the 
 	# queue.
 	iq.close()
 
-And we're done.  Notice the lack of signalling and keeping track of manaing 
-process completion, and the lack of `try ... except Empty` blocks.  You 
-just iterate through the queue, and when its done its done.
+This let's the IterableQueue know that no new producers
+will be coming onto the scene and adding more work.
+
+And we're done.  Notice the pleasant lack of signalling and keeping track 
+of process completion, and and notice the lack of `try ... except Empty` 
+blocks: you just iterate through the queue, and when its done its done.
 
 
 
