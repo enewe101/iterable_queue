@@ -4,7 +4,9 @@ with the unnecessarily messy logic of managing pools of producers and
 consumers in multiprocessing python programs.
 
 ## Install ##
-`pip install iterable-queue`
+```bash
+pip install iterable-queue`
+```
 
 ## Why? ##
 
@@ -41,12 +43,14 @@ Producers use the queue much like a `multiprocessing.Queue`, but with one
 small variation: when they are done putting work on the queue, they call
 `queue.close()`:
 
+```python
     producer_func(queue):
 		while some_condition:
             ...
             queue.put(some_work)
             ...
         queue.close()
+```
 
 But the beautiful part is with the consumers.
 They use the queue somewhat differently than `multiprocessing.Queue`: 
