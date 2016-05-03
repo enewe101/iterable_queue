@@ -1,4 +1,7 @@
 # iterable\_queue
+Prepare to feel relaxed.  Last time was the last time you will muck around 
+with the unnecessarily messy logic of managing pools of producers and 
+consumers in multiprocessing python programs.
 
 ## Install ##
 `pip install iterable-queue`
