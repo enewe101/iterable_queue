@@ -112,8 +112,8 @@ Now, let's get some processes started.  First, we'll need an `IterableQueue`
 Instance:
 
 ```python
-from iterable_queue import `IterableQueue`
-iq = `IterableQueue`
+from iterable_queue import IterableQueue
+iq = IterableQueue
 ```
 
 And now, we just start an arbitrary number of producer and consumer 
@@ -121,7 +121,7 @@ processes.  We give *producer endpoints* to the producers, which we get
 by calling `IterableQueue.get_producer()`, and we give *consumer endpoints*
 to consumers by calling `IterableQueue.get_consumer()`:
 
-```pythong
+```python
 from multiprocessing import Process
 
 # Start a bunch of producers:
@@ -143,9 +143,7 @@ Once we've finished making producer and consumer endpoints, we close
 the `IterableQueue`:  
 
 ```python
-	# Once we've finished adding producers and consumers, we close the 
-	# queue.
-	iq.close()
+iq.close()
 ```
 
 This let's the `IterableQueue` know that no new producers
