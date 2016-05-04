@@ -11,7 +11,6 @@ from multiprocessing import Queue, Pipe, Process
 from Queue import Empty
 import time
 import random
-import atexit
 
 #class TestDestruction(TestCase):
 #

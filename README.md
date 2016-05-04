@@ -5,7 +5,7 @@ consumers in multiprocessing python programs.
 
 ## Install ##
 
-``` bash
+```bash
 pip install iterable-queue
 ```
 
@@ -43,7 +43,7 @@ consumers are still at work, and this lets it take care of the tracking
 and signalling necessary to tell the difference between being 
 temporarily empty, and being empty with no new work coming.  Because the
 `IterableQueue` knows when no new work is coming, it can be treated like
-an iterator on the consumer end, stopping iteration naturally when all work 
+an iterable on the consumer end, stopping iteration naturally when all work 
 is complete.
 
 Producers use the queue much like a `multiprocessing.Queue`, but with one
@@ -74,13 +74,13 @@ it knows when no more work will come through the queue, and so it can
 stop iteration transparently.
 
 (Although you can, if you choose, consume the queue "manually" by calling 
-`queue.get()`.)
+`queue.get()`, with `Queue.Empty` being raised whenever the queue is empty, and `iterable_queue.ConsumerQueueClosedException` being raised when the queue is empty with no more work coming.)
 
 ## Use `IterableQueue` ##
 As mentioned, `IterableQueue` is a directed queue, meaning that it has 
-producer and consumer endpoings.  Both wrap the same underlying 
-`multiprocessing.Queue`, and expose *nearly* all of its methods.  
-An important exception is with the `put()` and `get()` methods: you can only
+producer and consumer endpoints.  Both wrap the same underlying 
+`multiprocessing.Queue`, and expose *nearly* all of its methods.
+Important exceptions are the `put()` and `get()` methods: you can only
 `put()` onto producer endpoints, and you can only `get()` from consumer 
 endpoints.  This distinction is needed for the management of consumer 
 iteration to work automatically.
@@ -144,7 +144,7 @@ for consumer_id in range(13):
 	Process(target=consumer_func, args=(queue, consumer_id)).start()
 ```
 
-Finally&mdash;and this is important&mdashonce we've finished making 
+Finally&mdash;and this is important&mdash;once we've finished making 
 producer and consumer endpoints, we close the `IterableQueue`:  
 
 ```python
