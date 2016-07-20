@@ -3,8 +3,8 @@ from unittest import main, TestCase
 from iq import (
 	manage_queue, ADD_PRODUCER, ADD_CONSUMER, CLOSED, ProducerQueue,
 	ConsumerQueue,
-	ProducerQueueClosedException, AllowDelegation, 
-	IterableQueueCloseSignal, ProducerQueueCloseSignal, 
+	ProducerQueueClosedException, AllowDelegation,
+	IterableQueueCloseSignal, ProducerQueueCloseSignal,
 	ConsumerQueueCloseSignal, ConsumerQueueClosedException, IterableQueue
 )
 from multiprocessing import Queue, Pipe, Process
@@ -12,49 +12,21 @@ from Queue import Empty
 import time
 import random
 
-#class TestDestruction(TestCase):
-#
-#	def test_destruction(self):
-#		iq = IterableQueue()
-#
-#		def func(producer):
-#			producer.queue.put('a')
-#
-#		func(iq.get_producer())
-#
-#
-#	#def test_minimal(self):
-#
-#	#	class A(object):
-#	#		def __init__(self, queue):
-#	#			self.queue = queue
-#
-#	#		def A_func(self):
-#	#			print 'I am an A'
-#
-#	#		def __del__(self):
-#	#			print 'A is destroying'
-#
-#
-#	#	def func(a):
-#	#		a.A_func()
-#
-#
-#	#	def hang(q):
-#	#		print 'hanging'
-#	#		q.get()
-#	#		print 'not hanging'
-#
-#
-#	#	some_q = Queue()
-#
-#	#	hanging_process = Process(target=hang, args=(some_q,))
-#	#	hanging_process.start()
-#
-#	#	func(A(some_q))
-#	#	print 'here'
+
+class Test(TestCase):
+	def test_bla(self):
+
+		iq = IterableQueue()
+		ip = iq.get_producer()
+		ic = iq.get_consumer()
+
+		ip.put('yo')
+		ip.close()
 
 
+		iq.close()
+		for m in ic:
+			print m
 
 
 class TestIterableQueue(TestCase):
@@ -98,7 +70,7 @@ class TestIterableQueue(TestCase):
 	def test_close_queue_after_producers(self):
 		'''
 		this test is very similar to the one above, the only difference
-		being that we close the IterableQueue after closing all of the 
+		being that we close the IterableQueue after closing all of the
 		producers.  We should be able to close them in any order
 		'''
 
@@ -172,11 +144,11 @@ class TestIterableQueue(TestCase):
 				iq_step1.get_consumer(), iq_step2.get_producer()
 			)).start()
 
-		# Finally we'll pull all the results aggregated on the 
+		# Finally we'll pull all the results aggregated on the
 		# second Iterable_queue
 		aggregated_queue = iq_step2.get_consumer()
 
-		# Close the queues to indicate that no more producers or 
+		# Close the queues to indicate that no more producers or
 		# consumers will be made
 		iq_step1.close()
 		iq_step2.close()
@@ -187,9 +159,9 @@ class TestIterableQueue(TestCase):
 			counter[i] += 1
 
 		# Finally, let's make sure that we actually got everything
-		# We expected.  Each producer was given an id from 1 to 
-		# num_producers+1, and was told to put its id onto the producer 
-		# queue a number of times equal to its id.  I.e. we should find 
+		# We expected.  Each producer was given an id from 1 to
+		# num_producers+1, and was told to put its id onto the producer
+		# queue a number of times equal to its id.  I.e. we should find
 		# one 1, two 2s, three 3s, etc.
 		for i in range(1, num_producers+1):
 			self.assertEqual(i, counter[i])
@@ -234,7 +206,7 @@ class TestManageQueue(TestCase):
 		num_consumers = 11
 		poll_timeout = 2
 
-		# Make some queues and pipes to simulate the scenario of a 
+		# Make some queues and pipes to simulate the scenario of a
 		# ManagedQueue
 		working_queue = Queue()
 		consumers2manager_signals = Queue()
@@ -256,9 +228,9 @@ class TestManageQueue(TestCase):
 		local.send(IterableQueueCloseSignal())
 
 		# At this point the manage_process should be alive and waiting
-		# for us to send `num_producers` number of 
+		# for us to send `num_producers` number of
 		# `ProducerQueueCloseSignal`s
-		# on the consumers2manager_signals.  
+		# on the consumers2manager_signals.
 		# Once it recieves that, it will "notify"
 		# all the consumers and close.  So we check that it doesn't close
 		# prematurely, but does close once we've sent enough signals.
@@ -271,10 +243,10 @@ class TestManageQueue(TestCase):
 			self.assertFalse(local.poll())
 			consumers2manager_signals.put(ProducerQueueCloseSignal())
 
-		# Check that num_consumer `ConsumerQueueCloseSignal`s are sent on 
+		# Check that num_consumer `ConsumerQueueCloseSignal`s are sent on
 		# the working_queue.  Meanwhile, simulate the ConsumerQueue
 		# recieving these signals: they respond by closing themselves and
-		# echoing back a `ConsumerQueueCloseSignal` over the 
+		# echoing back a `ConsumerQueueCloseSignal` over the
 		# consumers2manager_Queue
 		#print 'here'
 		for consumer in range(num_consumers):
@@ -346,7 +318,7 @@ class TestConsumerQueue(TestCase):
 		for message in messages:
 			queue.put(message)
 
-		# Pulling the messages off the queue, we should find that the 
+		# Pulling the messages off the queue, we should find that the
 		# Consumer queue steps transparently over the ProducerQueueClose
 		# Signal, so we will not see it as we iterate over the queue
 		for message in messages:
@@ -361,7 +333,7 @@ class TestConsumerQueue(TestCase):
 		# the ConsumerQueue, and was added to the consumers2manager_signals
 		# queue
 		self.assertTrue(isinstance(
-			consumers2manager_signals.get(timeout=queue_timeout), 
+			consumers2manager_signals.get(timeout=queue_timeout),
 			ProducerQueueCloseSignal
 		))
 
@@ -388,8 +360,8 @@ class TestConsumerQueue(TestCase):
 			ConsumerQueueCloseSignal
 		))
 
-		# If we put something onto the underlying queue now and try to 
-		# get it from the ConsumerQueue, we should get a 
+		# If we put something onto the underlying queue now and try to
+		# get it from the ConsumerQueue, we should get a
 		# ConsumerQueueClosedException
 		queue.put('yo')
 		with self.assertRaises(ConsumerQueueClosedException):
@@ -403,7 +375,7 @@ class TestConsumerQueue(TestCase):
 		consumer_queue = ConsumerQueue(queue, consumers2manager_signals)
 		message = 'yo'
 		queue_timeout = 0.1
-		
+
 		# The consumer_queue does not implement `put()`
 		with self.assertRaises(NotImplementedError):
 			consumer_queue.put()
@@ -428,10 +400,10 @@ class TestConsumerQueue(TestCase):
 		# kinds of `get` call
 		with self.assertRaises(Empty):
 			consumer_queue.get(timeout=queue_timeout)
-		
+
 		with self.assertRaises(Empty):
 			consumer_queue.get_nowait()
-		
+
 		with self.assertRaises(Empty):
 			consumer_queue.get(block=False)
 
@@ -468,16 +440,16 @@ class TestProducerQueue(TestCase):
 		# Close the ProducerQueue
 		producer_queue.close()
 
-		# Now we should find that a ProducerQueueCloseSignal was placed on 
-		# the working queue.  First take the message off that was put 
+		# Now we should find that a ProducerQueueCloseSignal was placed on
+		# the working queue.  First take the message off that was put
 		# on before the producer_queue was closed.
 		self.assertEqual(queue.get(timeout=queue_timeout), message)
 		self.assertTrue(isinstance(
-			queue.get(timeout=queue_timeout), 
+			queue.get(timeout=queue_timeout),
 			ProducerQueueCloseSignal
 		))
 
-		# Attempting to put something on the closed ProducerQueue raises 
+		# Attempting to put something on the closed ProducerQueue raises
 		# an exception.  It should not put anything onto the queue which
 		# we will test in a moment
 		with self.assertRaises(ProducerQueueClosedException):
@@ -490,7 +462,7 @@ class TestProducerQueue(TestCase):
 		# calling `ProducerQueue.close()` again is not an error.
 		producer_queue.close()
 
-		# But it doesn't cause a `ProducerQueueCloseSignal` to be placed on 
+		# But it doesn't cause a `ProducerQueueCloseSignal` to be placed on
 		# the working queue this time, so the working queue is empty.
 		with self.assertRaises(Empty):
 			queue.get(timeout=queue_timeout)
@@ -504,12 +476,12 @@ class TestProducerQueue(TestCase):
 		message = 'yo'
 		queue_timeout = 0.1
 
-		
+
 		# The producer_queue does not implement `get()`
 		queue.put(message)
 		with self.assertRaises(NotImplementedError):
 			producer_queue.get()
-		
+
 		with self.assertRaises(NotImplementedError):
 			producer_queue.get_nowait()
 
@@ -523,7 +495,7 @@ class TestProducerQueue(TestCase):
 		producer_queue.put_nowait(message)
 		self.assertEqual(queue.get(), message)
 
-		# Tests below are commented out because `get()` has been removed 
+		# Tests below are commented out because `get()` has been removed
 		# from the implementation of ProducerQueue to preserve signaling and
 		# management semantics.
 		#
