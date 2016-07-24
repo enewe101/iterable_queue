@@ -48,8 +48,9 @@ class AllowDelegation(Signal):
 
 class IterableQueue(object):
 
-	def __init__(self):
-		self._queue = Queue()
+	def __init__(self, maxsize=0):
+		print 'maxsize is:', maxsize
+		self._queue = Queue(maxsize)
 		self._consumers2manager_signals = Queue()
 		self._manage_pipe_local, self._manage_pipe_remote = Pipe()
 
@@ -318,7 +319,10 @@ class ConsumerQueue(object):
 
 
 	def __del__(self):
-		time.sleep(0.0001)
+		try:
+			time.sleep(0.0001)
+		except AttributeError:
+			pass
 
 
 
