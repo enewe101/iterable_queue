@@ -20,6 +20,8 @@ class ConsumerQueueClosedException(IterableQueueException):
 	pass
 class IterableQueueIllegalStateException(IterableQueueException):
 	pass
+class Done(IterableQueueException):
+	pass
 
 
 class Signal(object):
@@ -231,10 +233,15 @@ class ConsumerQueue(object):
 		return self
 
 
-	def next(self):
+	def next(self, timeout=None):
+		'''
+		Get the next element from the queue.  If no more elements
+		are expected, then raise StopIteration; otherwise if no elements 
+		are available element, wait timeout seconds, before raising Empty.  
+		'''
 		try:
-			return self.get()
-		except ConsumerQueueClosedException:
+			return self.get(timeout=timeout)
+		except Done:
 			raise StopIteration
 
 	# Delegate a bunch of functions to the underlying queue, but
@@ -271,9 +278,8 @@ class ConsumerQueue(object):
 	def get(self, block=True, timeout=None):
 
 		if self.status == CLOSED:
-			raise ConsumerQueueClosedException(
-				'`get` and `get_nowait` cannot be called on a closed '
-				'ConsumerQueue.'
+			raise Done(
+				'No more items in queue, and all item producers are closed'
 			)
 
 		got_return_val = False
@@ -292,9 +298,9 @@ class ConsumerQueue(object):
 			# ConsumerQueueClosedException.
 			elif isinstance(return_val, ConsumerQueueCloseSignal):
 				self.close()
-				raise ConsumerQueueClosedException(
-					'`get` and `get_nowait` cannot be called on a closed '
-					'ConsumerQueue.'
+				raise Done(
+					'No more items in queue, and all item producers are '
+					'closed'
 				)
 
 			# Otherwise indicate that we got an ordinary return val from
