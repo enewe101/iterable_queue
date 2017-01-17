@@ -2,6 +2,9 @@
 # not close the queue (which happens, e.g., if there's an exception outside 
 # of IterableQueue).
 
+import sys
+import signal
+import atexit
 from Queue import Empty
 from multiprocessing import Queue, Pipe, Process
 import time
@@ -45,6 +48,8 @@ class IterableQueueCloseSignal(CloseSignal):
 	pass
 class AllowDelegation(Signal):
 	pass
+class Die(Signal):
+	pass
 
 
 
@@ -56,6 +61,7 @@ class IterableQueue(object):
 		self._manage_pipe_local, self._manage_pipe_remote = Pipe()
 
 		# Start the manage_queue process
+		original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
 		self.management_process = Process(
 			target=manage_queue,
 			args = (
@@ -64,7 +70,10 @@ class IterableQueue(object):
 				self._manage_pipe_remote
 			)
 		)
+		self.management_process.daemon = True
 		self.management_process.start()
+		signal.signal(signal.SIGINT, self.die)
+		self.manager_status = OPEN
 
 	def get_producer(self):
 		self._manage_pipe_local.send(ADD_PRODUCER)
@@ -76,6 +85,11 @@ class IterableQueue(object):
 
 	def close(self):
 		self._manage_pipe_local.send(IterableQueueCloseSignal())
+		self.manager_status = CLOSED
+
+	def die(self, signal, frame):
+		self._queue.put(Die(), timeout=0.1)
+		sys.exit(1)
 
 
 def manage_queue(
@@ -100,9 +114,11 @@ def manage_queue(
 			num_consumers += 1
 		elif isinstance(message, IterableQueueCloseSignal):
 			status = CLOSED
+		elif isinstance(message, Die):
+			sys.exit(1)
 		else:
 			raise IterableQueueIllegalStateException(
-				'Got unexpected signal on consumers2manager_signals: %s' % message
+				'Got unexpected signal on management_signals: %s' % message
 			)
 
 	# We will end up here once the ManagedQueue has been closed.  Now
@@ -131,13 +147,18 @@ def manage_queue(
 	while num_producers > 0:
 		signal = consumers2manager_signals.get()
 
-		if not isinstance(signal, ProducerQueueCloseSignal):
+		if isinstance(signal, Die):
+			sys.exit(1)
+
+		elif isinstance(signal, ProducerQueueCloseSignal):
+			num_producers -= 1
+
+		else:
 			raise IterableQueueIllegalStateException(
 				'Got unexpected signal on consumers2manager_signals: %s'
 				% str(type(signal))
 			)
 
-		num_producers -= 1
 
 	# We will end up here once all of the producers are done.  Now we
 	# send out as many "close" signals, to the consumers, as there
@@ -158,12 +179,17 @@ def manage_queue(
 	# ConsumerQueueCloseSignals were sent out to the ConsumerQueues.
 	while num_consumers > 0:
 		signal = consumers2manager_signals.get()
-		if not isinstance(signal, ConsumerQueueCloseSignal):
+		if isinstance(signal, Die):
+			sys.exit(1)
+
+		elif isinstance(signal, ConsumerQueueCloseSignal):
+			num_consumers -= 1
+
+		else:
 			raise IterableQueueIllegalStateException(
 				'Got unexpected signal on consumers2manager_signals: %s'
 				% str(type(signal))
 			)
-		num_consumers -= 1
 
 	# Finally let the parent process know that everything was processed
 	# successfully.  This makes it possible to call `join` in the
@@ -225,8 +251,9 @@ class ConsumerQueue(object):
 		self.queue = queue
 		self.consumers2manager_signals = consumers2manager_signals
 
-		# Initialize status as OPEN
+		# Initialize status 
 		self.status = OPEN
+		self.clean_exit_is_set = False
 
 
 	def __iter__(self):
@@ -270,12 +297,21 @@ class ConsumerQueue(object):
 				'`%s` cannot be called on a closed ConsumerQueue.' % method
 			)
 
-
 	def get_nowait(self):
 		return self.get(block=False)
 
+	# Before calling "get", we make sure that we'll be ignoring any kill
+	# signals.  We'll take our orders from the manager, who will watch for
+	# kill signals, and pass them on so that Queues don't get corrupted
+	def set_clean_exit(self):
+		if not self.clean_exit_is_set:
+			signal.signal(signal.SIGINT, signal.SIG_IGN)
+			self.clean_exit_is_set = True
+
 
 	def get(self, block=True, timeout=None):
+
+		self.set_clean_exit()
 
 		if self.status == CLOSED:
 			raise Done(
@@ -294,7 +330,7 @@ class ConsumerQueue(object):
 				self.consumers2manager_signals.put(return_val)
 
 			# If we got a signal that this ConsumerQueue should close,
-			# se the status to `CLOSED`, and raise the
+			# set the status to `CLOSED`, and raise the
 			# ConsumerQueueClosedException.
 			elif isinstance(return_val, ConsumerQueueCloseSignal):
 				self.close()
@@ -302,6 +338,12 @@ class ConsumerQueue(object):
 					'No more items in queue, and all item producers are '
 					'closed'
 				)
+
+			# If we get a die signal, put it back onto the queue for other
+			# consumers to see it too, and exit
+			elif isinstance(return_val, Die):
+				self.queue.put(return_val)
+				sys.exit(1)
 
 			# Otherwise indicate that we got an ordinary return val from
 			# the queue
