@@ -6,7 +6,7 @@ import sys
 import signal
 import atexit
 from Queue import Empty
-from multiprocessing import Queue, Pipe, Process
+from multiprocessing import Queue, Pipe, Process, Manager
 import time
 
 OPEN = 0
@@ -56,12 +56,12 @@ class Die(Signal):
 class IterableQueue(object):
 
 	def __init__(self, maxsize=0):
-		self._queue = Queue(maxsize)
-		self._consumers2manager_signals = Queue()
+		manager = Manager()
+		self._queue = manager.Queue(maxsize)
+		self._consumers2manager_signals = manager.Queue()
 		self._manage_pipe_local, self._manage_pipe_remote = Pipe()
 
 		# Start the manage_queue process
-		original_sigint_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
 		self.management_process = Process(
 			target=manage_queue,
 			args = (
@@ -70,9 +70,8 @@ class IterableQueue(object):
 				self._manage_pipe_remote
 			)
 		)
-		self.management_process.daemon = True
+		self.management_process.daemon
 		self.management_process.start()
-		signal.signal(signal.SIGINT, self.die)
 		self.manager_status = OPEN
 
 	def get_producer(self):
@@ -86,10 +85,6 @@ class IterableQueue(object):
 	def close(self):
 		self._manage_pipe_local.send(IterableQueueCloseSignal())
 		self.manager_status = CLOSED
-
-	def die(self, signal, frame):
-		self._queue.put(Die(), timeout=0.1)
-		sys.exit(1)
 
 
 def manage_queue(
@@ -114,8 +109,6 @@ def manage_queue(
 			num_consumers += 1
 		elif isinstance(message, IterableQueueCloseSignal):
 			status = CLOSED
-		elif isinstance(message, Die):
-			sys.exit(1)
 		else:
 			raise IterableQueueIllegalStateException(
 				'Got unexpected signal on management_signals: %s' % message
@@ -147,10 +140,7 @@ def manage_queue(
 	while num_producers > 0:
 		signal = consumers2manager_signals.get()
 
-		if isinstance(signal, Die):
-			sys.exit(1)
-
-		elif isinstance(signal, ProducerQueueCloseSignal):
+		if isinstance(signal, ProducerQueueCloseSignal):
 			num_producers -= 1
 
 		else:
@@ -179,10 +169,7 @@ def manage_queue(
 	# ConsumerQueueCloseSignals were sent out to the ConsumerQueues.
 	while num_consumers > 0:
 		signal = consumers2manager_signals.get()
-		if isinstance(signal, Die):
-			sys.exit(1)
-
-		elif isinstance(signal, ConsumerQueueCloseSignal):
+		if isinstance(signal, ConsumerQueueCloseSignal):
 			num_consumers -= 1
 
 		else:
@@ -253,7 +240,6 @@ class ConsumerQueue(object):
 
 		# Initialize status 
 		self.status = OPEN
-		self.clean_exit_is_set = False
 
 
 	def __iter__(self):
@@ -290,7 +276,6 @@ class ConsumerQueue(object):
 	def put_nowait(self, *args, **kwargs):
 		raise NotImplementedError('`ConsumerQueue`s cannot `get_nowait()`.')
 
-
 	def raise_if_not_open(self, method):
 		if self.status == CLOSED:
 			raise ConsumerQueueClosedException(
@@ -300,18 +285,8 @@ class ConsumerQueue(object):
 	def get_nowait(self):
 		return self.get(block=False)
 
-	# Before calling "get", we make sure that we'll be ignoring any kill
-	# signals.  We'll take our orders from the manager, who will watch for
-	# kill signals, and pass them on so that Queues don't get corrupted
-	def set_clean_exit(self):
-		if not self.clean_exit_is_set:
-			signal.signal(signal.SIGINT, signal.SIG_IGN)
-			self.clean_exit_is_set = True
-
 
 	def get(self, block=True, timeout=None):
-
-		self.set_clean_exit()
 
 		if self.status == CLOSED:
 			raise Done(
@@ -338,12 +313,6 @@ class ConsumerQueue(object):
 					'No more items in queue, and all item producers are '
 					'closed'
 				)
-
-			# If we get a die signal, put it back onto the queue for other
-			# consumers to see it too, and exit
-			elif isinstance(return_val, Die):
-				self.queue.put(return_val)
-				sys.exit(1)
 
 			# Otherwise indicate that we got an ordinary return val from
 			# the queue
