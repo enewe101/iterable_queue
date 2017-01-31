@@ -18,35 +18,28 @@ by a pool of *producers*.  Of course, you want the consumers to keep
 pulling work from the queue as long as that queue isn't empty.
 
 The tricky part is, if the consumers are fast, they may continually drive
-the queue to empty even though the producers are still busy adding work.  So 
-in general, the producers also need to know if the consumers are all 
-done.  This means using some kind of signalling, either within the 
-queue itself or through some side channel.  It also means keeping track, 
-somewhere,
-of how many producers are still working, and when all producers are 
-finished, notifying each consumer of that fact.
-This means that, right inside the
-producer and consumer code, you need to embed this signalling and tracking
-logic, which is complicated and just feels wrong.  
-*And I'm just sick of it, I tell you.*
+the queue to empty even though the producers are still busy adding work.  This 
+means using some kind of signalling to keep track of whether producers are
+still actively producing, either within the queue itself or through some side 
+channel.  You also need to keep track of how many consumers there are, so that
+the right number of "STOP" signals can be sent to the consumers.  This gets
+tricky in the many to many case, and it just doesn't seem like one should have
+to worry about it *in any case*.
 
-Here's what I say: let the *queue* keep track of that stuff, so I can 
-stick to writing the logic of production and consumption for
-my producers and consumers.
+The IterableQueue keeps track of all this stuff, taking care of signalling
+transparently so that you can stick to writing the producer and consumer logic.
 
 ## Meet `IterableQueue` ##
 
 `IterableQueue` is a directed queue, which means that it has 
-(arbitrarily many) *producer endpoints* and *consumer endpoints*.  This
-directedness enables `IterableQueue` to know how many producers and 
-consumers are still at work, and this lets it take care of the tracking
-and signalling necessary to tell the difference between being 
-temporarily empty, and being empty with no new work coming.  Because the
-`IterableQueue` knows when no new work is coming, it can be treated like
-an iterable on the consumer end, stopping iteration naturally when all work 
-is complete.
+(arbitrarily many) *producer endpoints* and *consumer endpoints*.  For
+consumers, the IterableQueue can be treated like an iterable, meaning the
+consumer will stop naturally without you having to do any signalling.  
 
-Producers use the queue much like a `multiprocessing.Queue`, but with one
+And because the queue looks like an iterable, the consumer doesn't even have to
+know it's consuming a queue.
+
+Producers use the queue pretty much like a `multiprocessing.Queue`, but with one
 small variation: when they are done putting work on the queue, they call
 `queue.close()`:
 
@@ -59,9 +52,9 @@ producer_func(queue):
 	queue.close()
 ```
 
-The beautiful part is in how consumers use the queue, which is somewhat
-differently than it is with `multiprocessing.Queue`: 
-consumers can simply treat the queue as an iterable:
+The call to `queue.close()` is what makes it possible for the queue to know
+when there's no more work comming, so that it can be treated like an iterable
+by consumers:
 
 ```python
 consumer_func(queue):
@@ -69,12 +62,10 @@ consumer_func(queue):
 		do_something_with(work)
 ```
 
-Because the `IterableQueue` knows how many producers and consumers are open,
-it knows when no more work will come through the queue, and so it can
-stop iteration transparently.
-
-(Although you can, if you choose, consume the queue "manually" by calling 
-`queue.get()`, with `Queue.Empty` being raised whenever the queue is empty, and `iterable_queue.ConsumerQueueClosedException` being raised when the queue is empty with no more work coming.)
+You can, if you choose, consume the queue "manually" by calling 
+`queue.get()`.  `queue.Empty` being raised whenever the queue is empty, except
+when the queue is empty, *and* all producers are finished, it raises
+`iterable\_queue.Done`.
 
 ## Use `IterableQueue` ##
 As mentioned, `IterableQueue` is a directed queue, meaning that it has 
@@ -94,7 +85,6 @@ from time import sleep
 
 def producer_func(queue, producer_id):
 	for i in range(10):
-		sleep(random() / 100.0)
 		queue.put(producer_id)
 	queue.close()
 ```
@@ -106,57 +96,46 @@ Now let's setup a consumer function:
 ```python
 def consumer_func(queue, consumer_id):
 	for item in queue:
-		sleep(random() / 100.0)
-		print 'consumer %d saw item %d' % (consumer_id, item)
+		print('consumer %d saw item %d' % (consumer_id, item))
 ```
 
-Notice again how the consumer treats the queue as an iterable&mdash;there 
+Notice how the consumer treats the queue as an iterable&mdash;there 
 is no need to worry about detecting a termination condition.
 
 Now, let's get some processes started.  First, we'll need an `IterableQueue`
 Instance:
 
 ```python
-from iterable_queue import IterableQueue
-iq = IterableQueue
-```
 
-Now, we just start an arbitrary number of producer and consumer 
-processes.  We give *producer endpoints* to the producers, which we get
-by calling `IterableQueue.get_producer()`, and we give *consumer endpoints*
-to consumers by calling `IterableQueue.get_consumer()`:
-
-```python
 from multiprocessing import Process
+from iterable_queue import IterableQueue
 
-# Start a bunch of producers:
+# First we need an iterableQueue instance
+iq = IterableQueue
+
+# Now start a bunch of producers:
 for producer_id in range(17):
 	
 	# Give each producer a "producer-queue"
 	queue = iq.get_producer()
 	Process(target=producer_func, args=(queue, producer_id)).start()
 
-# Start a bunch of consumers
+# And start a bunch of consumers
 for consumer_id in range(13):
 
 	# Give each consumer a "consumer-queue"
 	queue = iq.get_consumer()
 	Process(target=consumer_func, args=(queue, consumer_id)).start()
+
+# And finally -- this is important!
+iq.close()	# This let's the iterable queue no that no new producers endpoints will be made
 ```
 
-Finally&mdash;and this is important&mdash;once we've finished making 
-producer and consumer endpoints, we close the `IterableQueue`:  
+Notice the last line&emdash;this let's the `IterableQueue` know that no new 
+producers will be coming onto the scene and adding more work.
 
-```python
-iq.close()
-```
-
-This let's the `IterableQueue` know that no new producers will be coming 
-onto the scene and adding more work.
-
-And we're done.  Notice the pleasant lack of signalling and keeping track 
-of process completion, and notice the lack of `try ... except Empty` 
-blocks: you just iterate through the queue, and when its done its done.
+And we're done.  No signalling, no keeping track of process completion, 
+and no `try ... except Empty`, just put on one end, and iterate on the other.
 
 You can try the above example by running [`example.py`](https://github.com/enewe101/iterable_queue/blob/master/iterable_queue/example.py).
 
