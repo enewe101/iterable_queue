@@ -15,10 +15,10 @@ def producer_func(queue, producer_id):
 		queue.put(producer_id)
 	queue.close()
 
+
 def consumer_func(queue, consumer_id):
 	for item in queue:
 		print('consumer %d saw item %d' % (consumer_id, item))
-
 
 
 def run_example():
