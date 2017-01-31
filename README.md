@@ -40,8 +40,8 @@ means that for consumers, the queue looks just like an iterable.  The consumers
 don't even have to know they have a queue.  
 
 Producers use the queue pretty much like a `multiprocessing.Queue`, but with 
-one small variation: when they are done putting work on the queue, they call
-`queue.close()`:
+one small variation: when they are done putting work on the queue, they should 
+call `queue.close()`:
 
 ```python
 producer_func(queue):
@@ -53,7 +53,7 @@ producer_func(queue):
 ```
 
 The call to `IterableQueue.close()` is what makes it possible for the queue to 
-know when there's no more work comming, so that it can be treated like an
+know when there's no more work coming, so that it can be treated like an
 iterable by consumers:
 
 ```python
@@ -64,10 +64,10 @@ consumer_func(queue):
 
 You can, if you choose, consume the queue "manually" by calling `queue.get()`.
 It delegates to an underlying `multiprocessing.Queue` and supports all of the
-usual arguments.  Calling `get()` on a queue that is empty (but not done) will
-raise `queue.Empty` like usual.  However, calling `get()` on a queue that is
-properly done (i.e. the queue is empty and no more producers are active) cleads
-to `IterableQueue.Done` being raised.
+usual arguments.  Calling `get()` on a queue, with block=True and timeout=None
+(the defaults) will raise `Queue.Empty` if the queue is empty, like usual.
+However, if the queue is not just ampty, but properly *done* (i.e. there are no
+more active producers) `IterableQueue.Done` will be raised instead.
 
 ## Example ##
 As mentioned, `IterableQueue` is a directed queue, meaning that it has 
@@ -78,8 +78,8 @@ Important exceptions are the `put()` and `get()` methods: you can only
 endpoints.  This distinction is needed for the management of consumer 
 iteration to work automatically.
 
-To see an example, let's set up a function that will be executed by 
-*producers*, i.e. workers that *put onto* the queue:
+Let's start by setting up a function that will be executed by *producers*, i.e.
+workers that *put onto* the queue:
 
 ```python
 from random import random
@@ -101,8 +101,7 @@ def consumer_func(queue, consumer_id):
 		print('consumer %d saw item %d' % (consumer_id, item))
 ```
 
-Notice how the consumer treats the queue as an iterable&mdash;there 
-is no need to worry about detecting a termination condition.
+Notice how the consumer treats the queue as an iterable.
 
 Now, let's get some processes started:
 
@@ -111,10 +110,10 @@ Now, let's get some processes started:
 from multiprocessing import Process
 from iterable_queue import IterableQueue
 
-# First we need an iterableQueue instance
+# Make an iterableQueue instance
 iq = IterableQueue
 
-# Now start a bunch of producers:
+# Start a bunch of producers:
 for producer_id in range(17):
 	
 	# Give each producer a "producer-queue"
@@ -128,8 +127,8 @@ for consumer_id in range(13):
 	queue = iq.get_consumer()
 	Process(target=consumer_func, args=(queue, consumer_id)).start()
 
-# And finally -- this is important!
-iq.close()	# This let's the iterable queue no that no new producers endpoints will be made
+# Lastly -- this is important -- close the IterableQueue.
+iq.close()	# This indicates no new producers endpoints will be made
 ```
 
 Notice the last line&mdash;this let's the `IterableQueue` know that no new 
