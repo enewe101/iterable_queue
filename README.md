@@ -1,4 +1,4 @@
-# iterable\_queue
+# iterable-queue
 Prepare to feel relaxed.  Last time was the last time you will muck around 
 with the unnecessarily messy logic of managing pools of producers and 
 consumers in multiprocessing python programs.
@@ -82,9 +82,6 @@ Let's start by setting up a function that will be executed by *producers*, i.e.
 workers that *put onto* the queue:
 
 ```python
-from random import random
-from time import sleep
-
 def producer_func(queue, producer_id):
 	for i in range(10):
 		queue.put(producer_id)

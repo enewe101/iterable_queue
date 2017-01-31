@@ -4,8 +4,6 @@ from builtins import range
 from past.utils import old_div
 from iterable_queue import IterableQueue
 from multiprocessing import Process
-from random import random
-from time import sleep
 
 NUM_PRODUCERS = 64
 NUM_CONSUMERS = 64
