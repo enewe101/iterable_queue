@@ -1,18 +1,128 @@
-# TODO: ensure that there is a clean exit if the user of IterableQueue does 
-# not close the queue (which happens, e.g., if there's an exception outside 
-# of IterableQueue).
+'''
+This module contains all of the major functionality for the IterableQueue, 
+including the IterableQueue class itself.  Users should create an IterableQueue
+instance, and obtain producer and consumer endpoints from it by calling
+IterableQueue.get_producer() and IterableQueue.get_consumer().  These yield 
+instances of ProducerQueue and ConsumerQueue endpoints, respectively, which wrap 
+an underlying multiprocessing.Queue.
 
+The ProducerQueue and ConsumerQueue endpoints expose the methods of 
+multiprocessing.Queue, except that the ProducerQueue cannot .get() and the 
+ConsumerQueue cannot .put().
+'''
+
+# When a new IterableQueue instance is made, it spawns a manager_process
+# which is in charge of keeping track of how many producer and consumer
+# endpoints are still active.  This makes it possible to know when the queue
+# is truly done, which means that it isn't just empty, but the producers are
+# also finished adding to it.
+#
+# The IterableQueue wraps an underlying multiprocessing.Queue, called the
+# "work_queue", which holds the items put by the producers and consumed
+# by the consumers.
+#
+# The IterableQueue also owns a "manage_queue" that is used to keep track of how 
+# many producers and consumers are still active, and to keep processes
+# syncronized during initialization and teardown.  The manage_queue is used to
+# signal between the main process, the manager, and the queue endpoints (which
+# are typically each living in their own process).
+#
+# During the lifetime of the IterableQueue, the manager goes through three 
+# states:
+#
+#	- OPEN: While the manager process is in the OPEN state, the IterableQueue
+#		is able to create new producer and consumer endpoints.  So long as
+#		the state remains OPEN, we can never consider the work_queue to be
+#		DONE, because active producer endpoints may add more work.  In fact,
+#		new producer endpoints may be added to the queue.
+#
+#	- CLOSED: Once the manager is CLOSED, no new endpoints can be added,
+#		although there may still be many active producer endpoints.  While in
+#		this state, the manager_process waits for the number of active
+#		producers to drop to zero.  At that point, nothing new can be added to
+#		the work_queue.
+#
+#	- CLOSED and num_producers == 0:
+#		Once the number of producers reaches zero, the manager process places
+#		special close signals onto the work_queue, which instruct consumer
+#		queues queues to raise DONE.  If consumer queues are being treated as
+#		an iterable it will cause them to StopIteration.  When a ConsumerQueue
+#		receives the close signal, it sends back a confirmation to the
+#		manager_process confirming that it has closed.
+#
+#		Meanwhile, the manager waits until all consumers have closed before
+#		exiting
+#
+#	- CLOSED and num_consumers == 0:
+#		Once the number of active consumers drops to zero, the manager closes
+#
+# The manage_queue provides a side-channel for signalling without having the
+# signals get mixed in with the application's queue submissions.  However,
+# some signalling must be sent over the work_queue to ensure proper
+# synchronization.
+#
+# For example, when a ProducerQueue closes, it should not signal directly
+# To the manager over the manage_queue.  If it did that, then it's possible
+# that the manager_process would get the signal before the producer's most
+# recent put() had flushed.  The manager could in turn place send a close
+# signal to the consumers before the last item had been put on the work_queue.
+# For this reason, both the work_queue and the manager_queue are used
+# for signalling, depending on whether the signal should be synchronized with
+# the work_queue or not.
+#
+# The flow of signalling works as follows:
+# While the manager_process is open, the main process (the one in which the
+# IterableQueue instance was created), sends signals on the manage_queue
+# telling the manager_process when new endpoints are created or destroyed.
+# At some point, in the main process, IterableQueue.close() is called,
+# and the main process then sends a signal on the manage_queue to the
+# manager_process indicating that no new endpoints will be created.
+#
+# When ProducerQueue.close() is called on producer endpoints, they don't
+# signal over teh manage_queue, since we need to guarantee the manager
+# recievs this signal after that producer's put() on the work_queue have
+# flushed.  Thereofre the producer endpoints send close signals over the 
+# work_queue.
+#
+# Consumers watch for the producer endpoints' close signals on the work_queue
+# and simply forward them to the manager over the manage queue.  This is done
+# transparently so that those signals are never actually yielded to the caller
+# of the consumer queue's get().
+#
+# Once the manager has seen enough close signals forwarded to it from consumers
+# (such that it knows there are no active producers), it sends close signals
+# out to the consumers over the work_queue.  These signals are guaranteed to be
+# the last signals in the work_queue, because they are placed onto the
+# work_queue queue after the last item from the last producer has been
+# retrieved from the work_queue. The manager sends out as many signals as there
+# are consumers.  and each consumer closes in response to seeing one of these
+# signals.
+#
+# The manager stays open during this time.  Right before closing, the consumers
+# send back a confirmation to the manager tha they have closed (this matters
+# because if each working item takes a long time to process, they may not
+# consume the close signals right away, and if the manage process closes right
+# after placing the close signals on the queue, it could corrupt the queue.
+# Only after seeing a confirmation from each consumer that it has closed, sent 
+# over the manage_queue, does the manager finally exit.
+
+
+from builtins import str
+from builtins import range
+from builtins import object
 import sys
 import signal
 import atexit
-from Queue import Empty
+from queue import Empty
 from multiprocessing import Queue, Pipe, Process, Manager
 import time
+
 
 OPEN = 0
 CLOSED = 1
 ADD_PRODUCER = 2
 ADD_CONSUMER = 3
+READY = 4
 
 
 class IterableQueueException(Exception):
@@ -46,10 +156,6 @@ class IterableQueueCloseSignal(CloseSignal):
 	Queues are empty.
 	'''
 	pass
-class AllowDelegation(Signal):
-	pass
-class Die(Signal):
-	pass
 
 
 
@@ -57,186 +163,128 @@ class IterableQueue(object):
 
 	def __init__(self, maxsize=0):
 		manager = Manager()
-		self._queue = manager.Queue(maxsize)
-		self._consumers2manager_signals = manager.Queue()
-		self._manage_pipe_local, self._manage_pipe_remote = Pipe()
-
+		self._work_queue = manager.Queue(maxsize)
+		self._manage_queue = manager.Queue()
 		# Start the manage_queue process
-		self.management_process = Process(
-			target=manage_queue,
-			args = (
-				self._queue,
-				self._consumers2manager_signals,
-				self._manage_pipe_remote
-			)
+		self._management_process = Process(
+			target=_manage, args=(self._work_queue, self._manage_queue)
 		)
-		self.management_process.daemon
-		self.management_process.start()
-		self.manager_status = OPEN
+		self._management_process.start()
+		self._wait_until_ready()
+
+	def _wait_until_ready(self):
+		# Wait for the manager to be ready before we spawn any endpoints
+		msg = self._manage_queue.get()
+		if not msg == READY:
+			raise SyncError('IterableQueue: manager not ready: %s' % msg)
+		self._manage_queue.put(READY)
 
 	def get_producer(self):
-		self._manage_pipe_local.send(ADD_PRODUCER)
-		return ProducerQueue(self._queue)
+		self._manage_queue.put(ADD_PRODUCER)
+		return ProducerQueue(self._work_queue)
 
 	def get_consumer(self):
-		self._manage_pipe_local.send(ADD_CONSUMER)
-		return ConsumerQueue(self._queue, self._consumers2manager_signals)
+		self._manage_queue.put(ADD_CONSUMER)
+		return ConsumerQueue(self._work_queue, self._manage_queue)
 
 	def close(self):
-		self._manage_pipe_local.send(IterableQueueCloseSignal())
-		self.manager_status = CLOSED
+		self._manage_queue.put(IterableQueueCloseSignal())
 
 
-def manage_queue(
-	queue,
-	consumers2manager_signals,
-	management_signals
-):
+def _manage(_work_queue, _manage_queue):
 
+	# Synchronize with the main process before any endpoints can be spawned
+	_manage_queue.put(READY)
+	if not _manage_queue.get() == READY:
+		raise IterableQueueIllegalStateException(
+			'Got unexpected signal on manage_queue: %s' % message
+		)
+
+
+	# Keep track of how many producer and consumer endpoints are active.
 	num_consumers = 0
 	num_producers = 0
 
-	# As long as the ManagedQueue is "open", the management process
-	# listens for updates about adding new producers and consumers.  The
-	# producers and consumers can actively share data over the underlying
-	# queue during this time.
+	# As long as the status is OPEN, the management process
+	# listens for signals indicating new producer and consumer endpoints have
+	# been created.  Producers and consumers can share data over the work_queue
+	# during this time.
 	status = OPEN
 	while status == OPEN:
-		message = management_signals.recv()
+		message = _manage_queue.get()
 		if message == ADD_PRODUCER:
 			num_producers += 1
 		elif message == ADD_CONSUMER:
 			num_consumers += 1
+		elif isinstance(message, ProducerQueueCloseSignal):
+			num_producers -= 1
 		elif isinstance(message, IterableQueueCloseSignal):
 			status = CLOSED
 		else:
 			raise IterableQueueIllegalStateException(
-				'Got unexpected signal on management_signals: %s' % message
+				'Got unexpected signal on manage_queue: %s' % message
 			)
 
-	# We will end up here once the ManagedQueue has been closed.  Now
-	# we monitor the consumers2manager_signals queue, and wait until we
-	# see as many `CLOSE_SIGNALS` as there were *producers*
-	# (By way of explanation: the producers put `CLOSE_SIGNALS`, directly
-	# onto the working queue, so it is the consumers who receive the
-	# `CLOSE_SIGNALS`, and they forward them to the manager using the
-	# `consumer2manager_signals` queue.  This is necessary because:
-	#
-	# 1) Directly forwarding CLOSE_SIGNALS from producers to the manager
-	# 	using a dedicated producers2manager_signals queu will not
-	#	synchronize with the working queue: it is possible the manager
-	#	would receive a producer's CLOSE_SIGNAL over the
-	#	producers2manager_signals before that producer's last bit of
-	#	addition to the working queue was flushed, which could mean that
-	#	items get lost.
-	#
-	# 2) Having the manager watch the working queue for CLOSE_SIGNALs itself
-	#	would require that it inspect, everything that passes through the
-	#	queue, meaning it would need to take things off a queue shared
-	#	with producers, then add it to a queue shared with consumers,
-	#	which makes for a lot of unnecessary copying and would probably
-	#	become a bottleneck.
-	#
+	# At this point, the Iterable Queue is closed, so no more endpoints will
+	# be created.  We continue to listen for producers being closed, awaiting
+	# the point at which all producers are closed.  At that point, nothing more
+	# can be added to the work_queue because there's no more active producers.
 	while num_producers > 0:
-		signal = consumers2manager_signals.get()
+		signal = _manage_queue.get()
 
 		if isinstance(signal, ProducerQueueCloseSignal):
 			num_producers -= 1
 
 		else:
 			raise IterableQueueIllegalStateException(
-				'Got unexpected signal on consumers2manager_signals: %s'
+				'Got unexpected signal on manage_queue: %s'
 				% str(type(signal))
 			)
 
-
-	# We will end up here once all of the producers are done.  Now we
-	# send out as many "close" signals, to the consumers, as there
-	# consumers.  We send them over the normal working queue to maintain
-	# synchronization with work that may have been put on the queue just
-	# before the last producer finished, and which might still be waiting
-	# to be flushed.
-
-	#First, wait a small amount of time to explicitly
-	# give such hypothetical work time to flush
-	time.sleep(0.001)
+	# All producers are closed.  Now signal to the consumers that they should
+	# close (they will only receive this signal after all working items have
+	# been removed from the work_queue).
 	for consumer in range(num_consumers):
-		queue.put(ConsumerQueueCloseSignal())
+		_work_queue.put(ConsumerQueueCloseSignal())
 
-	# Now, we wait for the ConsumerQueues to confirm that they have
-	# closed.  This could take awhile, because there may have been a lot
-	# of work in the working queue when the the initial
-	# ConsumerQueueCloseSignals were sent out to the ConsumerQueues.
+	# Listen for consumers to echo back confirmation that they have closed.
+	# The manager waits to exit to make sure that the consumers get the close 
+	# signals.
 	while num_consumers > 0:
-		signal = consumers2manager_signals.get()
+		signal = _manage_queue.get()
 		if isinstance(signal, ConsumerQueueCloseSignal):
 			num_consumers -= 1
 
 		else:
 			raise IterableQueueIllegalStateException(
-				'Got unexpected signal on consumers2manager_signals: %s'
+				'Got unexpected signal on manage_queue: %s'
 				% str(type(signal))
 			)
-
-	# Finally let the parent process know that everything was processed
-	# successfully.  This makes it possible to call `join` in the
-	# parent process.
-	management_signals.send(IterableQueueCloseSignal())
-
-
-
-#def setup_delegation(delegator, delegatee, method, before_delegation=None):
-#	'''
-#	Adds a callable named by `method` to delegator, which calls `method`
-#	on delegatee, passing it all the arguments, and returning the result.
-#	Provides an easy way for a wrapper class to expose methods of
-#	an underlying class based on the method's name.
-#	'''
-#
-#	# Define a delegation function that captures `method` in a closure.
-#	# and calls `method` on the delegatee, passing all arguments through.
-#	# However, before calling `method` on the delegatee, the delegator is
-#	# given the opportunity to yield
-#	def delegate(*args, **kwargs):
-#		if before_delegation is not None:
-#			preempt = getattr(delegator, before_delegation)(
-#				method, *args, **kwargs
-#			)
-#			if not isinstance(preempt, AllowDelegation):
-#				return preempt
-#		return getattr(delegatee, method)(*args, **kwargs)
-#
-#	# Add a callable to delegator, called `method`, which calls the
-#	# delegation function, which as seen above, calls the method on
-#	# the delegatee.
-#	setattr(delegator, method, delegate)
 
 
 class ConsumerQueue(object):
 
-	slept = False
-
-	def __init__(self, queue, consumers2manager_signals):
+	def __init__(self, _work_queue, _manage_queue):
 		'''
 		INPUTS
 
-		* queue [multiprocessing.Queue]:  A queue that serves as the
+		* _work_queue [multiprocessing.Queue]:  A queue that serves as the
 			underlying queue for sharing arbitrary messages between
 			producer and consumer processes
 
-		* consumers2manager_signals [multiprocessing.Queue]: A special
+		* _manage_queue [multiprocessing.Queue]: A special
 			queue used
 			for communication with the management process spawned by an
 			IterableQueue process that keeps track of how many alive
 			producers and consumers there are.  Used to receive a signal
 			from the management process that no more work will be
-			added to the queue.
+			added to the work_queue.
 
 		'''
 
 		# Register parameters to the local namespace
-		self.queue = queue
-		self.consumers2manager_signals = consumers2manager_signals
+		self._work_queue = _work_queue
+		self._manage_queue = _manage_queue
 
 		# Initialize status 
 		self.status = OPEN
@@ -246,9 +294,12 @@ class ConsumerQueue(object):
 		return self
 
 
+	def __next__(self, timeout=None):
+		return self.next(timeout)
+
 	def next(self, timeout=None):
 		'''
-		Get the next element from the queue.  If no more elements
+		Get the next element from the work_queue.  If no more elements
 		are expected, then raise StopIteration; otherwise if no elements 
 		are available element, wait timeout seconds, before raising Empty.  
 		'''
@@ -257,18 +308,18 @@ class ConsumerQueue(object):
 		except Done:
 			raise StopIteration
 
-	# Delegate a bunch of functions to the underlying queue, but
+	# Delegate a bunch of functions to the underlying work_queue, but
 	# always check first that `self` is open, raising
 	# `ProducerQueueClosedException` if not
 	def qsize(self, *args, **kwargs):
-		self.raise_if_not_open('qsize')
-		return self.queue.qsize(*args, **kwargs)
+		self._raise_if_not_open('qsize')
+		return self._work_queue.qsize(*args, **kwargs)
 	def empty(self, *args, **kwargs):
-		self.raise_if_not_open('empty')
-		return self.queue.empty(*args, **kwargs)
+		self._raise_if_not_open('empty')
+		return self._work_queue.empty(*args, **kwargs)
 	def full(self, *args, **kwargs):
-		self.raise_if_not_open('full')
-		return self.queue.full(*args, **kwargs)
+		self._raise_if_not_open('full')
+		return self._work_queue.full(*args, **kwargs)
 
 	# Don't allow put and put_nowait to be called on ProducerQueues
 	def put(self, *args, **kwargs):
@@ -276,7 +327,7 @@ class ConsumerQueue(object):
 	def put_nowait(self, *args, **kwargs):
 		raise NotImplementedError('`ConsumerQueue`s cannot `get_nowait()`.')
 
-	def raise_if_not_open(self, method):
+	def _raise_if_not_open(self, method):
 		if self.status == CLOSED:
 			raise ConsumerQueueClosedException(
 				'`%s` cannot be called on a closed ConsumerQueue.' % method
@@ -297,12 +348,12 @@ class ConsumerQueue(object):
 		while not got_return_val:
 
 			# This can raise `Empty`, which is a desired effect.
-			return_val = self.queue.get(block, timeout)
+			return_val = self._work_queue.get(block, timeout)
 
 			# If we get a signal that a producer queue is closing, forward
 			# it to the manager.
 			if isinstance(return_val, ProducerQueueCloseSignal):
-				self.consumers2manager_signals.put(return_val)
+				self._manage_queue.put(return_val)
 
 			# If we got a signal that this ConsumerQueue should close,
 			# set the status to `CLOSED`, and raise the
@@ -315,11 +366,11 @@ class ConsumerQueue(object):
 				)
 
 			# Otherwise indicate that we got an ordinary return val from
-			# the queue
+			# the work_queue
 			else:
 				got_return_val = True
 
-		# Return the item from the queue
+		# Return the item from the work_queue
 		return return_val
 
 
@@ -331,23 +382,14 @@ class ConsumerQueue(object):
 		# Set status to `CLOSED`, and send a signal to the management
 		# process indicating the ConsumerQueue was closed
 		self.status = CLOSED
-		self.consumers2manager_signals.put(ConsumerQueueCloseSignal())
-
-
-	def __del__(self):
-		try:
-			time.sleep(0.0001)
-		except AttributeError:
-			pass
-
-
+		self._manage_queue.put(ConsumerQueueCloseSignal())
 
 
 
 class ProducerQueue(object):
 
-	def __init__(self, queue):
-		self.queue = queue
+	def __init__(self, _work_queue):
+		self._work_queue = _work_queue
 		self.status = OPEN
 
 
@@ -355,20 +397,20 @@ class ProducerQueue(object):
 	# always check first that `self` is open, raising
 	# `ProducerQueueClosedException` if not
 	def qsize(self, *args, **kwargs):
-		self.raise_if_not_open('qsize')
-		return self.queue.qsize(*args, **kwargs)
+		self._raise_if_not_open('qsize')
+		return self._work_queue.qsize(*args, **kwargs)
 	def empty(self, *args, **kwargs):
-		self.raise_if_not_open('empty')
-		return self.queue.empty(*args, **kwargs)
+		self._raise_if_not_open('empty')
+		return self._work_queue.empty(*args, **kwargs)
 	def full(self, *args, **kwargs):
-		self.raise_if_not_open('full')
-		return self.queue.full(*args, **kwargs)
+		self._raise_if_not_open('full')
+		return self._work_queue.full(*args, **kwargs)
 	def put(self, *args, **kwargs):
-		self.raise_if_not_open('put')
-		return self.queue.put(*args, **kwargs)
+		self._raise_if_not_open('put')
+		return self._work_queue.put(*args, **kwargs)
 	def put_nowait(self, *args, **kwargs):
-		self.raise_if_not_open('put_nowait')
-		return self.queue.put_nowait(*args, **kwargs)
+		self._raise_if_not_open('put_nowait')
+		return self._work_queue.put_nowait(*args, **kwargs)
 
 
 	# Don't allow get and get_nowait to be called on ProducerQueues
@@ -378,7 +420,7 @@ class ProducerQueue(object):
 		raise NotImplementedError('`ProducerQueue`s cannot `get_nowait()`.')
 
 
-	def raise_if_not_open(self, method):
+	def _raise_if_not_open(self, method):
 		if self.status == CLOSED:
 			raise ProducerQueueClosedException(
 				'`%s` cannot be called on a closed ProducerQueue.' % method
@@ -394,4 +436,4 @@ class ProducerQueue(object):
 		# Set status to `CLOSED`, and send a signal to the management
 		# process indicating the ProducerQueue was closed
 		self.status = CLOSED
-		self.queue.put(ProducerQueueCloseSignal())
+		self._work_queue.put(ProducerQueueCloseSignal())

@@ -1,32 +1,23 @@
+from __future__ import division
+from __future__ import print_function
+from __future__ import absolute_import
+from future import standard_library
+standard_library.install_aliases()
+from builtins import range
+from past.utils import old_div
 from collections import Counter
 from unittest import main, TestCase
-from iq import (
-	manage_queue, ADD_PRODUCER, ADD_CONSUMER, CLOSED, ProducerQueue,
-	ConsumerQueue,
-	ProducerQueueClosedException, AllowDelegation,
-	IterableQueueCloseSignal, ProducerQueueCloseSignal,
-	ConsumerQueueCloseSignal, ConsumerQueueClosedException, IterableQueue
+from iterable_queue.iq import (
+	_manage, ADD_PRODUCER, ADD_CONSUMER, CLOSED, ProducerQueue,
+	ConsumerQueue, ProducerQueueClosedException, IterableQueueCloseSignal, 
+	ProducerQueueCloseSignal, ConsumerQueueCloseSignal, 
+	ConsumerQueueClosedException, IterableQueue, Done, READY
 )
 from multiprocessing import Queue, Pipe, Process
-from Queue import Empty
+from queue import Empty
 import time
 import random
 
-
-class Test(TestCase):
-	def test_bla(self):
-
-		iq = IterableQueue()
-		ip = iq.get_producer()
-		ic = iq.get_consumer()
-
-		ip.put('yo')
-		ip.close()
-
-
-		iq.close()
-		for m in ic:
-			print m
 
 
 class TestIterableQueue(TestCase):
@@ -39,8 +30,8 @@ class TestIterableQueue(TestCase):
 		iteration idiom.  This test doesn't use multiprocessing.
 		'''
 
-		messages1 = range(10)
-		messages2 = range(10, 20)
+		messages1 = list(range(10))
+		messages2 = list(range(10, 20))
 		messages = messages1 + messages2
 
 		iq = IterableQueue()
@@ -74,8 +65,8 @@ class TestIterableQueue(TestCase):
 		producers.  We should be able to close them in any order
 		'''
 
-		messages1 = range(10)
-		messages2 = range(10, 20)
+		messages1 = list(range(10))
+		messages2 = list(range(10, 20))
 		messages = messages1 + messages2
 
 		iq = IterableQueue()
@@ -112,7 +103,7 @@ class TestIterableQueue(TestCase):
 		# ID onto the queue, repeatedly.
 		def produce(queue, worker_id, num_to_produce):
 			for i in range(num_to_produce):
-				time.sleep(random.random()/100.0)
+				time.sleep(old_div(random.random(),100.0))
 				queue.put(worker_id)
 
 			queue.close()
@@ -167,39 +158,10 @@ class TestIterableQueue(TestCase):
 			self.assertEqual(i, counter[i])
 
 
-#class TestDelegation(TestCase):
-#
-#	def test_delegation(self):
-#
-#		class B(object):
-#			def B_func1(self):
-#				return 'B_func1'
-#
-#			def B_func2(self):
-#				return 'B_func2'
-#
-#		class A(object):
-#			def __init__(self, b):
-#				setup_delegation(self, b, 'B_func1', '_intercept')
-#				setup_delegation(self, b, 'B_func2', '_intercept')
-#
-#			def _intercept(self, method, *args, **kwargs):
-#				if method == 'B_func1':
-#					return AllowDelegation()
-#				elif method == 'B_func2':
-#					return '*' + b.B_func2() + '*'
-#
-#		b = B()
-#		a = A(b)
-#
-#		self.assertEqual(a.B_func1(), 'B_func1')
-#		self.assertEqual(a.B_func2(), '*B_func2*')
-
-
 
 class TestManageQueue(TestCase):
 
-	def test_manage_queue(self):
+	def test_manage(self):
 
 		# Define some constants used in the test
 		num_producers = 7
@@ -209,60 +171,44 @@ class TestManageQueue(TestCase):
 		# Make some queues and pipes to simulate the scenario of a
 		# ManagedQueue
 		working_queue = Queue()
-		consumers2manager_signals = Queue()
-		local, remote = Pipe()
+		manage_queue = Queue()
 
-		# Make and start a manage_queue process
+		# Make and start a manage process
 		manage_process = Process(
-			target=manage_queue,
-			args=(working_queue, consumers2manager_signals, remote)
-		)
+			target=_manage, args=(working_queue, manage_queue))
 		manage_process.start()
 
-		# Simulate issueing several producer and consumer processes
+		# Immediately take the ready signal
+		self.assertTrue(manage_queue.get() == READY)
+		manage_queue.put(READY)
+
+		# Simulate issuing several producer and consumer processes
 		# and then closing the ManagedQueue
 		for producer in range(num_producers):
-			local.send(ADD_PRODUCER)
+			manage_queue.put(ADD_PRODUCER)
 		for consumer in range(num_consumers):
-			local.send(ADD_CONSUMER)
-		local.send(IterableQueueCloseSignal())
+			manage_queue.put(ADD_CONSUMER)
+		manage_queue.put(IterableQueueCloseSignal())
 
-		# At this point the manage_process should be alive and waiting
-		# for us to send `num_producers` number of
-		# `ProducerQueueCloseSignal`s
-		# on the consumers2manager_signals.
-		# Once it recieves that, it will "notify"
-		# all the consumers and close.  So we check that it doesn't close
-		# prematurely, but does close once we've sent enough signals.
-		# Also, just before it closes, it will send a close signal back
-		# over the pipe, so we also check that it does that, but not
-		# prematurely.
+		# At this point the manage_process should be alive and waiting for us
+		# to send `num_producers` number of `ProducerQueueCloseSignal`s on the
+		# manage_queue.  Once it recieves that, it will "notify" all the
+		# consumers and close.  So we check that it doesn't close prematurely,
+		# but does close once we've sent enough signals.
 		for producer in range(num_producers):
-			#print 'producer %d' % producer
 			self.assertTrue(manage_process.is_alive())
-			self.assertFalse(local.poll())
-			consumers2manager_signals.put(ProducerQueueCloseSignal())
+			manage_queue.put(ProducerQueueCloseSignal())
 
 		# Check that num_consumer `ConsumerQueueCloseSignal`s are sent on
 		# the working_queue.  Meanwhile, simulate the ConsumerQueue
 		# recieving these signals: they respond by closing themselves and
 		# echoing back a `ConsumerQueueCloseSignal` over the
-		# consumers2manager_Queue
-		#print 'here'
+		# manage_queue
 		for consumer in range(num_consumers):
-			#print 'consumer %d' % consumer
 			self.assertTrue(isinstance(
 				working_queue.get(timeout=2), ConsumerQueueCloseSignal
 			))
-			consumers2manager_signals.put(ConsumerQueueCloseSignal())
-
-		# Now check that the close signal was sent back over the pipe
-		# indicating that all producers are accounted for and that the
-		# messages to all consumers was put onto the queue
-		self.assertTrue(local.poll(poll_timeout))
-		self.assertTrue(isinstance(local.recv(), IterableQueueCloseSignal))
-
-		#print 'here'
+			manage_queue.put(ConsumerQueueCloseSignal())
 
 
 class TestConsumerQueue(TestCase):
@@ -270,9 +216,9 @@ class TestConsumerQueue(TestCase):
 	def test_iteration(self):
 
 		queue = Queue()
-		consumers2manager_signals = Queue()
-		consumer_queue = ConsumerQueue(queue, consumers2manager_signals)
-		messages = range(10)
+		manage_queue = Queue()
+		consumer_queue = ConsumerQueue(queue, manage_queue)
+		messages = list(range(10))
 		queue_timeout = 0.1
 
 		# First, put several elements onto the queue
@@ -293,18 +239,21 @@ class TestConsumerQueue(TestCase):
 		# should have been removed and interpreted transparently
 		self.assertEqual(messages_seen, messages)
 
+		# Give time for the queue to flush (normally manager process does this)
+		time.sleep(0.1)
+
 
 	def test_closure(self):
 
-		queue = Queue()
-		consumers2manager_signals = Queue()
-		consumer_queue = ConsumerQueue(queue, consumers2manager_signals)
-		messages = range(10)
+		work_queue = Queue()
+		manage_queue = Queue()
+		consumer_queue = ConsumerQueue(work_queue, manage_queue)
+		messages = list(range(10))
 		queue_timeout = 0.1
 
-		# First, put several elements onto the queue
+		# First, put several elements onto the work_queue
 		for message in messages:
-			queue.put(message)
+			work_queue.put(message)
 
 		# The consuer_queue should be able to get all the messages
 		for message in messages:
@@ -312,67 +261,61 @@ class TestConsumerQueue(TestCase):
 				consumer_queue.get(timeout=queue_timeout), message
 			)
 
-		# Now put a ProducerQueueCloseSignal on the queue, followed
+		# Now put a ProducerQueueCloseSignal on the work_queue, followed
 		# by more messages
-		queue.put(ProducerQueueCloseSignal())
+		work_queue.put(ProducerQueueCloseSignal())
 		for message in messages:
-			queue.put(message)
+			work_queue.put(message)
 
-		# Pulling the messages off the queue, we should find that the
-		# Consumer queue steps transparently over the ProducerQueueClose
-		# Signal, so we will not see it as we iterate over the queue
+		# Pulling the messages off the work_queue, we should find that the
+		# Consumer work_queue steps transparently over the ProducerQueueClose
+		# Signal, so we will not see it as we iterate over the work_queue
 		for message in messages:
 			self.assertEqual(
 				consumer_queue.get(timeout=queue_timeout), message
 			)
-		# And the queue is now empty
+		# And the work_queue is now empty
 		with self.assertRaises(Empty):
 			consumer_queue.get(timeout=queue_timeout)
 
 		# But the ProducerQueueCloseSignal was indeed silently seen by
-		# the ConsumerQueue, and was added to the consumers2manager_signals
-		# queue
+		# the ConsumerQueue, and was added to the manage_queue
+		# work_queue
 		self.assertTrue(isinstance(
-			consumers2manager_signals.get(timeout=queue_timeout),
+			manage_queue.get(timeout=queue_timeout),
 			ProducerQueueCloseSignal
 		))
 
-		# We'll now add more items to the queue, followed by simulating
+		# We'll now add more items to the work_queue, followed by simulating
 		# a ConsumerQueueCloseSignal being sent to the ConsumerQueue
 		# on the working_queue, which should cause it to raise
 		# ConsumerQueueClosedException once get is called and the
 		# ConsumerQueueCloseSingal is recieved
 		for message in messages:
-			queue.put(message)
-		queue.put(ConsumerQueueCloseSignal())
+			work_queue.put(message)
+		work_queue.put(ConsumerQueueCloseSignal())
 		for message in messages:
 			self.assertEqual(
 				consumer_queue.get(timeout=queue_timeout), message
 			)
-		with self.assertRaises(ConsumerQueueClosedException):
+		with self.assertRaises(Done):
 			val = consumer_queue.get(timeout=queue_timeout)
 
-		# At this point the consumer queue should have echoed back
-		# `ConsumerQueueCloseSignal`s over the consumers2manager_signals
-		# queue
+		# At this point the consumer work_queue should have echoed back
+		# `ConsumerQueueCloseSignal`s over the manage_queue
+		# work_queue
 		self.assertTrue(isinstance(
-			consumers2manager_signals.get(timeout=queue_timeout),
+			manage_queue.get(timeout=queue_timeout),
 			ConsumerQueueCloseSignal
 		))
 
-		# If we put something onto the underlying queue now and try to
-		# get it from the ConsumerQueue, we should get a
-		# ConsumerQueueClosedException
-		queue.put('yo')
-		with self.assertRaises(ConsumerQueueClosedException):
-			consumer_queue.get(timeout=queue_timeout)
 
 
-	def test_ConsumerQueue_delegation(self):
+	def test_delegation(self):
 
 		queue = Queue()
-		consumers2manager_signals = Queue()
-		consumer_queue = ConsumerQueue(queue, consumers2manager_signals)
+		manage_queue = Queue()
+		consumer_queue = ConsumerQueue(queue, manage_queue)
 		message = 'yo'
 		queue_timeout = 0.1
 
@@ -466,7 +409,6 @@ class TestProducerQueue(TestCase):
 		# the working queue this time, so the working queue is empty.
 		with self.assertRaises(Empty):
 			queue.get(timeout=queue_timeout)
-
 
 
 	def test_ProducerQueue_delegation(self):

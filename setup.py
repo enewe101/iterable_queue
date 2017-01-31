@@ -13,7 +13,7 @@ from os import path
 here = path.abspath(path.dirname(__file__))
 
 # Get the long description from the README file
-with open(path.join(here, 'README.md'), encoding='utf-8') as f:
+with open(path.join(here, 'README.rst'), encoding='utf-8') as f:
     long_description = f.read()
 
 setup(
@@ -23,7 +23,7 @@ setup(
 	# single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.2.1',
+    version='1.1.1',
 
     description='A queue for python that feels like an iterable and knows when its producers are finished',
     long_description=long_description,
@@ -56,7 +56,8 @@ setup(
         # Specify the Python versions you support here. In particular, 
 		# ensure
         # that you indicate whether you support Python 2, Python 3 or both.
-        'Programming Language :: Python :: 2.7',
+        'Programming Language :: Python :: 2',
+        'Programming Language :: Python :: 3',
     ],
 
     # What does your project relate to?
@@ -67,5 +68,6 @@ setup(
     packages=['iterable_queue'],
 	package_data={
 		'iterable_queue': ['README.md']
-	}
+	},
+	install_requires=['future']
 )
