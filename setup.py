@@ -23,7 +23,7 @@ setup(
 	# single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='1.2.0',
+    version='1.2.1',
 
     description='A queue for python that feels like an iterable and knows when its producers are finished',
     long_description=long_description,
