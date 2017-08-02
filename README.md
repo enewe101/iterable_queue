@@ -141,7 +141,7 @@ for p in producers + consumers:
 
 ```
 
-Notice the last line&mdash;this let's the `IterableQueue` know that no new 
+Notice the last line&mdash;this lets the `IterableQueue` know that no new 
 producers will be coming onto the scene and adding more work.
 
 And we're done.  No signalling, no keeping track of process completion, 
