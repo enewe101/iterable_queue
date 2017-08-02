@@ -45,11 +45,11 @@ call `queue.close()`:
 
 ```python
 producer_func(queue):
-	while some_condition:
-		...
-		queue.put(some_work)
-		...
-	queue.close()
+    while some_condition:
+        ...
+        queue.put(some_work)
+        ...
+    queue.close()
 ```
 
 The call to `IterableQueue.close()` is what makes it possible for the queue to 
@@ -58,8 +58,8 @@ iterable by consumers:
 
 ```python
 consumer_func(queue):
-	for work in queue:
-		do_something_with(work)
+    for work in queue:
+        do_something_with(work)
 ```
 
 You can, if you choose, consume the queue "manually" by calling `queue.get()`.
@@ -84,9 +84,9 @@ workers that *put onto* the queue:
 
 ```python
 def producer_func(queue, producer_id):
-	for i in range(10):
-		queue.put(producer_id)
-	queue.close()
+    for i in range(10):
+        queue.put(producer_id)
+    queue.close()
 ```
 
 Notice how the producer calls `queue.close()` when it's done putting
@@ -95,8 +95,8 @@ stuff onto the queue.
 Now let's set up a consumer function:
 ```python
 def consumer_func(queue, consumer_id):
-	for item in queue:
-		print('consumer %d saw item %d' % (consumer_id, item))
+    for item in queue:
+        print('consumer %d saw item %d' % (consumer_id, item))
 ```
 
 Notice how the consumer treats the queue as an iterable.
@@ -108,8 +108,8 @@ Now, let's get some processes started:
 from multiprocessing import Process
 from iterable_queue import IterableQueue
 
-NUM_PRODUCERS = 17
-NUM_CONSUMERS = 13
+NUM_PRODUCERS = 3
+NUM_CONSUMERS = 5
 
 # Make an iterableQueue instance
 iq = IterableQueue()
@@ -117,27 +117,27 @@ iq = IterableQueue()
 # Start a bunch of producers, give each one a producer endpoint
 producers = []
 for producer_id in range(NUM_PRODUCERS):
-	queue = iq.get_producer()
-	p = Process(target=producer_func, args=(queue, producer_id))
-	p.start()
-	producers.append(p)
+    queue = iq.get_producer()
+    p = Process(target=producer_func, args=(queue, producer_id))
+    p.start()
+    producers.append(p)
 
 # And start a bunch of consumers
 consumers = []
 for consumer_id in range(NUM_CONSUMERS):
 
-	# Give each consumer a "consumer-queue"
-	consumer_endpoint = iq.get_consumer()
-	p = Process(target=consumer_func, args=(consumer_endpoint, consumer_id))
-	p.start()
-	consumers.append(p)
+    # Give each consumer a "consumer-queue"
+    consumer_endpoint = iq.get_consumer()
+    p = Process(target=consumer_func, args=(consumer_endpoint, consumer_id))
+    p.start()
+    consumers.append(p)
 
 # Lastly -- this is important -- close the IterableQueue.
-iq.close()	# This indicates no new producers endpoints will be made
+iq.close()    # This indicates no new producers endpoints will be made
 
 # Wait for workers to finish
 for p in producers + consumers:
-	p.join()
+    p.join()
 
 ```
 

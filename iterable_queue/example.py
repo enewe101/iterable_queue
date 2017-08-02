@@ -41,7 +41,7 @@ def run_example():
         p.start()
         consumers.append(p)
 
-    # Lastly -- this is important -- close the IterableQueue.
+    # Lastly, *this is important*, close the IterableQueue.
     iq.close()    # This indicates no new producers endpoints will be made
 
     # Wait for workers to finish
