@@ -64,10 +64,11 @@ consumer_func(queue):
 
 You can, if you choose, consume the queue "manually" by calling `queue.get()`.
 It delegates to an underlying `multiprocessing.Queue` and supports all of the
-usual arguments.  Calling `get()` on a queue, with block=True and timeout=None
-(the defaults) will raise `Queue.Empty` if the queue is empty, like usual.
-However, if the queue is not just ampty, but properly *done* (i.e. there are no
-more active producers) `IterableQueue.Done` will be raised instead.
+usual arguments.  Calling `get()` on a queue, with `block=True` and
+`timeout=None` (the defaults) will raise `Queue.Empty` if the queue is empty,
+like usual.  However, if the queue is not just empty, but properly *done* (i.e.
+there are no more active producers) `IterableQueue.Done` will be raised
+instead.
 
 ## Example ##
 As mentioned, `IterableQueue` is a directed queue, meaning that it has 
@@ -107,25 +108,37 @@ Now, let's get some processes started:
 from multiprocessing import Process
 from iterable_queue import IterableQueue
 
-# Make an iterableQueue instance
-iq = IterableQueue
+NUM_PRODUCERS = 17
+NUM_CONSUMERS = 13
 
-# Start a bunch of producers:
-for producer_id in range(17):
-	
-	# Give each producer a "producer-queue"
+# Make an iterableQueue instance
+iq = IterableQueue()
+
+# Start a bunch of producers, give each one a producer endpoint
+producers = []
+for producer_id in range(NUM_PRODUCERS):
 	queue = iq.get_producer()
-	Process(target=producer_func, args=(queue, producer_id)).start()
+	p = Process(target=producer_func, args=(queue, producer_id))
+	p.start()
+	producers.append(p)
 
 # And start a bunch of consumers
-for consumer_id in range(13):
+consumers = []
+for consumer_id in range(NUM_CONSUMERS):
 
 	# Give each consumer a "consumer-queue"
-	queue = iq.get_consumer()
-	Process(target=consumer_func, args=(queue, consumer_id)).start()
+	consumer_endpoint = iq.get_consumer()
+	p = Process(target=consumer_func, args=(consumer_endpoint, consumer_id))
+	p.start()
+	consumers.append(p)
 
 # Lastly -- this is important -- close the IterableQueue.
 iq.close()	# This indicates no new producers endpoints will be made
+
+# Wait for workers to finish
+for p in producers + consumers:
+	p.join()
+
 ```
 
 Notice the last line&mdash;this let's the `IterableQueue` know that no new 
@@ -134,7 +147,40 @@ producers will be coming onto the scene and adding more work.
 And we're done.  No signalling, no keeping track of process completion, 
 and no `try ... except Empty`, just put on one end, and iterate on the other.
 
-You can try the above example by running [`example.py`](https://github.com/enewe101/iterable_queue/blob/master/iterable_queue/example.py).
+The output you'd see from running the example is below.  You can try the above example by running [`example.py`](https://github.com/enewe101/iterable_queue/blob/master/iterable_queue/example.py).
+
+```
+consumer 1 saw item 0
+consumer 0 saw item 0
+consumer 1 saw item 0
+consumer 0 saw item 0
+consumer 1 saw item 0
+consumer 1 saw item 0
+consumer 0 saw item 1
+consumer 1 saw item 1
+consumer 2 saw item 0
+consumer 0 saw item 0
+consumer 2 saw item 1
+consumer 0 saw item 0
+consumer 1 saw item 2
+consumer 0 saw item 1
+consumer 2 saw item 2
+consumer 1 saw item 2
+consumer 0 saw item 1
+consumer 1 saw item 2
+consumer 3 saw item 0
+consumer 2 saw item 1
+consumer 1 saw item 2
+consumer 2 saw item 1
+consumer 3 saw item 2
+consumer 3 saw item 1
+consumer 0 saw item 2
+consumer 1 saw item 2
+consumer 2 saw item 1
+consumer 4 saw item 1
+consumer 2 saw item 2
+consumer 4 saw item 2
+```
 
 
 
